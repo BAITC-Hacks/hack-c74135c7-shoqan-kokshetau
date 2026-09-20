@@ -1,2 +1,2 @@
-# hack-c74135c7-shoqan-kokshetau
+# shoqan-kokshetau
 Hackathon team repository for Shoqan Kokshetau
