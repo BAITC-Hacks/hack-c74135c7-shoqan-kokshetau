@@ -16,13 +16,15 @@ services:
       FRONTEND_URL: http://localhost:5173
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-local-demo-secret-change-me}
-    volumes: [".:/app"]
+    volumes: [".:/app", "api_node_modules:/app/node_modules"]
     depends_on: [db]
   web:
-    image: node:22-alpine
+    # vinext currently bundles its local worker runtime for x86 Linux.
+    platform: linux/amd64
+    image: node:22-bookworm
     working_dir: /app
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     ports: ["5173:5173"]
-    volumes: [".:/app"]
+    volumes: [".:/app", "web_node_modules:/app/node_modules"]
     depends_on: [api]
-volumes: { postgres_data: {} }
+volumes: { postgres_data: {}, api_node_modules: {}, web_node_modules: {} }
