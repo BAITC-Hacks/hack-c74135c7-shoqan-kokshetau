@@ -1,0 +1,30 @@
+import "dotenv/config";
+import express from "express";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import pg from "pg";
+import OpenAI from "openai";
+
+const app = express();
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL || "postgres://tasklevel:tasklevel@localhost:5432/tasklevel" });
+const jwtSecret = process.env.JWT_SECRET || "local-demo-secret-change-me";
+app.use(express.json());
+app.use((_, res, next) => { res.setHeader("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "http://localhost:5173"); res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization"); res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS"); next(); });
+app.options("/{*any}", (_, res) => res.sendStatus(204));
+
+const requireUser = (req,res,next) => { try { req.user=jwt.verify(req.headers.authorization?.replace("Bearer ",""), jwtSecret); next(); } catch { res.status(401).json({error:"Требуется вход"}); } };
+const scoreTask = (task) => ({ ...task, score: [["context",20],["data",20],["expected_result",15],["success_criteria",15],["constraints",10],["users",10],["contact",10]].reduce((s,[k,p])=>s+(String(task[k]||"").trim()?p:0),0) });
+
+app.get("/api/health", (_,res)=>res.json({status:"ok"}));
+app.post("/api/auth/register", async (req,res) => { const {name,email,password,role="business"}=req.body; if(!name||!email||!password) return res.status(400).json({error:"Заполните имя, email и пароль"}); try { const hash=await bcrypt.hash(password,10); const {rows:[user]}=await pool.query("insert into users(name,email,password_hash,role) values($1,$2,$3,$4) returning id,name,email,role",[name,email,hash,role]); res.status(201).json({user,token:jwt.sign({id:user.id,role:user.role},jwtSecret,{expiresIn:"24h"})}); } catch { res.status(409).json({error:"Этот email уже зарегистрирован"}); } });
+app.post("/api/auth/login", async (req,res) => { const {email,password}=req.body; const {rows:[user]}=await pool.query("select * from users where email=$1",[email]); if(!user||!(await bcrypt.compare(password,user.password_hash))) return res.status(401).json({error:"Неверный email или пароль"}); res.json({user:{id:user.id,name:user.name,email:user.email,role:user.role},token:jwt.sign({id:user.id,role:user.role},jwtSecret,{expiresIn:"24h"})}); });
+app.get("/api/tasks", async (_,res)=>{ const {rows}=await pool.query("select * from tasks where published=true order by score desc, created_at desc"); res.json(rows.map(scoreTask)); });
+app.post("/api/tasks", requireUser, async (req,res)=>{ const t=scoreTask(req.body); const values=[req.user.id,t.title,t.industry,t.context,t.data,t.expected_result,t.success_criteria,t.constraints,t.users,t.contact,t.interaction_format,t.score,Boolean(t.published)]; const {rows:[task]}=await pool.query("insert into tasks(owner_id,title,industry,context,data,expected_result,success_criteria,constraints,users,contact,interaction_format,score,published) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *",values); res.status(201).json(task); });
+app.post("/api/ai/clarify", async (req,res)=>{ const draft=String(req.body.draft||"").trim(); if(!draft) return res.status(400).json({error:"Введите черновик"}); const fallback={questions:["Кто будет пользоваться решением?","Какие данные или материалы доступны?","Как измерить успешный результат?"],missingFields:["Пользователи","Данные и материалы","Критерии успеха"],source:"fallback"}; if(!process.env.OPENAI_API_KEY) return res.json(fallback); try { const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY}); const response=await client.responses.create({model:process.env.OPENAI_MODEL||"gpt-4o-mini",input:`Ты аналитик бизнес-задач. Не добавляй фактов. По черновику ниже верни только JSON: {"questions":[ровно 3 коротких вопроса],"missingFields":[список полей]}. Черновик: ${draft}`,text:{format:{type:"json_object"}}}); const result=JSON.parse(response.output_text); res.json({...result,source:"openai"}); } catch { res.json(fallback); } });
+app.post("/api/tasks/:id/proposals", requireUser, async (req,res)=>{ if(req.user.role!=="student_team") return res.status(403).json({error:"Отклик доступен только студенческой команде"}); const {idea,plan,timeline,prototype_url}=req.body; const {rows:[proposal]}=await pool.query("insert into proposals(task_id,team_id,idea,plan,timeline,prototype_url) values($1,$2,$3,$4,$5,$6) returning *",[req.params.id,req.user.id,idea,plan,timeline,prototype_url]); res.status(201).json(proposal); });
+app.get("/api/tasks/:id/proposals", requireUser, async (req,res)=>{ const {rows:[task]}=await pool.query("select owner_id from tasks where id=$1",[req.params.id]); if(!task||task.owner_id!==req.user.id) return res.status(403).json({error:"Просматривать отклики может автор задачи"}); const {rows}=await pool.query("select p.*,u.name as team_name from proposals p join users u on u.id=p.team_id where p.task_id=$1 order by p.created_at desc",[req.params.id]); res.json(rows); });
+app.post("/api/proposals/:id/decision", requireUser, async (req,res)=>{ const status=req.body.status==="selected"?"selected":"rejected"; const {rows:[proposal]}=await pool.query("update proposals p set status=$1 where p.id=$2 and exists (select 1 from tasks t where t.id=p.task_id and t.owner_id=$3) returning p.*",[status,req.params.id,req.user.id]); if(!proposal) return res.status(403).json({error:"Вы не можете принять это решение"}); res.json(proposal); });
+app.get("/api/tasks/:id/messages", requireUser, async (req,res)=>{ const {rows}=await pool.query("select m.*,u.name from messages m join users u on u.id=m.sender_id where task_id=$1 order by created_at",[req.params.id]); res.json(rows); });
+app.post("/api/tasks/:id/messages", requireUser, async (req,res)=>{ const {rows:[message]}=await pool.query("insert into messages(task_id,sender_id,body) values($1,$2,$3) returning *",[req.params.id,req.user.id,req.body.body]); res.status(201).json(message); });
+app.listen(process.env.PORT||3001,()=>console.log("TaskLevel API listening"));

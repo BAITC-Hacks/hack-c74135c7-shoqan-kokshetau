@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tasklevel
+      POSTGRES_PASSWORD: tasklevel
+      POSTGRES_DB: tasklevel
+    volumes: ["postgres_data:/var/lib/postgresql/data", "./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql", "./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql"]
+  api:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && node server/index.mjs"
+    ports: ["3001:3001"]
+    environment:
+      DATABASE_URL: postgres://tasklevel:tasklevel@db:5432/tasklevel
+      FRONTEND_URL: http://localhost:5173
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-local-demo-secret-change-me}
+    volumes: [".:/app"]
+    depends_on: [db]
+  web:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports: ["5173:5173"]
+    volumes: [".:/app"]
+    depends_on: [api]
+volumes: { postgres_data: {} }
