@@ -1,0 +1,15 @@
+{
+  "name": "shoqan-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env.local server/index.js",
+    "dev": "node --watch --env-file-if-exists=.env.local server/index.js",
+    "test": "node --test",
+    "check": "node --check server/index.js && node --check server/app.js && node --check server/auth.js && node --check server/limits.js && node --check server/domain.js && node --check server/ai.js && node --check server/translate.js && node --check server/store.js && node --check server/seed.js && node --check public/app.js && node --check public/account.js",
+    "seed": "node --env-file-if-exists=.env.local server/seed.js",
+    "demo": "node scripts/demo.js"
+  }
+}
